@@ -245,12 +245,48 @@ async def transcribe_text(
 # -----------------------
 # Endpoint: Subtitles (SRT)
 # -----------------------
+
+def split_sentences(text: str):
+    """Split text into sentences using punctuation."""
+    parts = re.split(r'([.!?])', text)
+    sentences = [
+        (parts[i] + (parts[i+1] if i+1 < len(parts) else "")).strip()
+        for i in range(0, len(parts), 2)
+    ]
+    return [s for s in sentences if s]
+
+
+def wrap_text_to_two_lines(sentence: str, max_chars_per_line: int = 40):
+    """
+    Wrap a long sentence into max 2 lines.
+    If >2 lines, merge extra into the 2nd line.
+    """
+    words = sentence.split()
+    current_line = ""
+    lines = []
+
+    for word in words:
+        if len(current_line) + len(word) + 1 <= max_chars_per_line:
+            current_line += (" " if current_line else "") + word
+        else:
+            lines.append(current_line)
+            current_line = word
+    if current_line:
+        lines.append(current_line)
+
+    if len(lines) > 2:
+        lines = [lines[0], " ".join(lines[1:])]
+
+    return lines
+
+
 def generate_srt(segments, first_speech_time: float = 0.0, max_chars_per_line: int = 40):
     """
-    Generate SRT text without numbering, and wrap text so each block has max 2 lines.
+    Generate SRT text, split into sentences, each block max 2 lines.
     """
     lines = []
     first_adjusted = False
+    index = 1
 
     for seg in segments:
         start, end = seg.start, seg.end
@@ -258,34 +294,31 @@ def generate_srt(segments, first_speech_time: float = 0.0, max_chars_per_line: i
             start = first_speech_time
             first_adjusted = True
 
-        # Format timing line
-        lines.append(f"{format_srt_time(start)} --> {format_srt_time(end)}")
+        # Split text into sentences
+        sentences = split_sentences(seg.text.strip())
 
-        # Wrap subtitle text into 2 lines max
-        text = seg.text.strip()
-        words = text.split()
-        current_line = ""
-        wrapped = []
+        # Distribute timing across sentences
+        total_chars = sum(len(s) for s in sentences)
+        current_time = start
 
-        for word in words:
-            if len(current_line) + len(word) + 1 <= max_chars_per_line:
-                current_line += (" " if current_line else "") + word
-            else:
-                wrapped.append(current_line)
-                current_line = word
-        if current_line:
-            wrapped.append(current_line)
+        for s in sentences:
+            proportion = len(s) / total_chars if total_chars > 0 else 0
+            duration = proportion * (end - start)
+            s_start, s_end = current_time, current_time + duration
+            current_time = s_end
 
-        # Limit to max 2 lines (join the rest into the 2nd line)
-        if len(wrapped) > 2:
-            wrapped = [wrapped[0], " ".join(wrapped[1:])]
+            # Wrap into max 2 lines
+            wrapped_lines = wrap_text_to_two_lines(s, max_chars_per_line)
 
-        # Add wrapped lines
-        lines.extend(wrapped)
-        lines.append("")  # blank line between blocks
+            # Build SRT block
+            lines.append(str(index))
+            lines.append(f"{format_srt_time(s_start)} --> {format_srt_time(s_end)}")
+            lines.extend(wrapped_lines)
+            lines.append("")  # blank line
+
+            index += 1
 
     return "\n".join(lines)
-
 
 @app.post("/transcribe_srt")
 async def transcribe_to_srt(video: UploadFile = File(...)):
