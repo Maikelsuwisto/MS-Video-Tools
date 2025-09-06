@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+faster-whisper
+pydub
+ffmpeg-python
+webrtcvad
+soundfile
+numpy
