@@ -51,8 +51,8 @@ def health():
     return {"message": "API is running ✅"}
 
 @app.get("/")
-def root():
-    return {"message": "Backend running ✅"}
+async def serve_index():
+    return FileResponse(os.path.join(build_path, "index.html"))
 
 # -----------------------
 # Upload folder
