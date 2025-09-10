@@ -246,43 +246,43 @@ async def transcribe_text(
 # Endpoint: Subtitles (SRT)
 # -----------------------
 
-def split_sentences(text: str):
-    """Split text into sentences using punctuation."""
-    parts = re.split(r'([.!?])', text)
-    sentences = [
-        (parts[i] + (parts[i+1] if i+1 < len(parts) else "")).strip()
-        for i in range(0, len(parts), 2)
-    ]
-    return [s for s in sentences if s]
-
-
-def wrap_text_to_two_lines(sentence: str, max_chars_per_line: int = 40):
+def wrap_text_fixed(text: str, max_chars_per_line: int = 40, max_lines: int = 2):
     """
-    Wrap a long sentence into max 2 lines.
-    If >2 lines, merge extra into the 2nd line.
+    Break text into chunks that fit in subtitles:
+    - Max `max_chars_per_line` per line
+    - Max `max_lines` lines per subtitle
+    - If text too long, split into multiple subtitle blocks
     """
-    words = sentence.split()
+    words = text.split()
+    chunks = []
+    current_lines = []
     current_line = ""
-    lines = []
 
     for word in words:
         if len(current_line) + len(word) + 1 <= max_chars_per_line:
             current_line += (" " if current_line else "") + word
         else:
-            lines.append(current_line)
+            current_lines.append(current_line)
             current_line = word
+
+            # If we already reached max_lines, push subtitle block
+            if len(current_lines) == max_lines:
+                chunks.append(current_lines)
+                current_lines = []
+    
     if current_line:
-        lines.append(current_line)
+        current_lines.append(current_line)
+    if current_lines:
+        chunks.append(current_lines)
 
-    if len(lines) > 2:
-        lines = [lines[0], " ".join(lines[1:])]
-
-    return lines
+    return chunks
 
 
 def generate_srt(segments, first_speech_time: float = 0.0, max_chars_per_line: int = 40):
     """
-    Generate SRT text, split into sentences, each block max 2 lines.
+    Generate SRT text:
+    - Wrap text into chunks max 2 lines, max 40 chars per line
+    - Preserve video timing proportionally
     """
     lines = []
     first_adjusted = False
@@ -294,31 +294,37 @@ def generate_srt(segments, first_speech_time: float = 0.0, max_chars_per_line: i
             start = first_speech_time
             first_adjusted = True
 
-        # Split text into sentences
-        sentences = split_sentences(seg.text.strip())
+        # Split text into subtitle blocks
+        chunks = wrap_text_fixed(seg.text.strip(), max_chars_per_line)
 
-        # Distribute timing across sentences
-        total_chars = sum(len(s) for s in sentences)
+        # Distribute time proportionally across chunks
+        total_chars = sum(sum(len(line) for line in chunk) for chunk in chunks)
         current_time = start
 
-        for s in sentences:
-            proportion = len(s) / total_chars if total_chars > 0 else 0
+        for chunk in chunks:
+            chunk_len = sum(len(line) for line in chunk)
+            proportion = chunk_len / total_chars if total_chars > 0 else 0
             duration = proportion * (end - start)
             s_start, s_end = current_time, current_time + duration
             current_time = s_end
 
-            # Wrap into max 2 lines
-            wrapped_lines = wrap_text_to_two_lines(s, max_chars_per_line)
-
             # Build SRT block
             lines.append(str(index))
             lines.append(f"{format_srt_time(s_start)} --> {format_srt_time(s_end)}")
-            lines.extend(wrapped_lines)
+            lines.extend(chunk)
             lines.append("")  # blank line
-
             index += 1
 
     return "\n".join(lines)
+
+
+def format_srt_time(seconds: float) -> str:
+    """Format seconds to SRT timestamp (hh:mm:ss,ms)."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
 @app.post("/transcribe_srt")
 async def transcribe_to_srt(video: UploadFile = File(...)):
